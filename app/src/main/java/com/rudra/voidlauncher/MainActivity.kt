@@ -1,262 +1,265 @@
 package com.rudra.voidlauncher
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
-import android.graphics.drawable.Drawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 
-data class AppItem(
-    val label: String,
-    val packageName: String,
-    val icon: Drawable
-)
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            VoidLauncherTheme {
-                HomeScreen()
-            }
+            VoidLiquidLauncher()
         }
     }
 }
 
 @Composable
-fun VoidLauncherTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            background = Color.Black,
-            surface = Color(0xFF1E1E1E),
-            onBackground = Color.White,
-            onSurface = Color.White
-        ),
-        content = content
-    )
-}
-
-@Composable
-fun HomeScreen() {
+fun VoidLiquidLauncher() {
     val context = LocalContext.current
-    var appsList by remember { mutableStateOf<List<AppItem>>(emptyList()) }
-    var searchQuery by remember { mutableStateOf("") }
-    var isDrawerOpen by remember { mutableStateOf(false) }
+    val pm = context.packageManager
 
-    // Load installed launcher apps
-    LaunchedEffect(Unit) {
-        val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN, null).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
+    var isDrawerOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var roll by remember { mutableFloatStateOf(0f) }
+    var pitch by remember { mutableFloatStateOf(0f) }
+
+    // জাইরোস্কোপ ও লাইভ সেন্সর লিসেনার (১২০ FPS অপটিমাইজড)
+    DisposableEffect(Unit) {
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                event?.let {
+                    val rotationMatrix = FloatArray(9)
+                    SensorManager.getRotationMatrixFromVector(rotationMatrix, it.values)
+                    val orientation = FloatArray(3)
+                    SensorManager.getOrientation(rotationMatrix, orientation)
+
+                    roll = (orientation[2] * 35f).coerceIn(-40f, 40f)
+                    pitch = (orientation[1] * 20f).coerceIn(-25f, 25f)
+                }
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
-        val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(intent, 0)
-        appsList = resolveInfos.map {
-            AppItem(
-                label = it.loadLabel(pm).toString(),
-                packageName = it.activityInfo.packageName,
-                icon = it.loadIcon(pm)
-            )
-        }.sortedBy { it.label.lowercase() }
+        sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        onDispose { sensorManager.unregisterListener(listener) }
     }
 
-    val filteredApps = remember(searchQuery, appsList) {
-        if (searchQuery.isEmpty()) appsList
-        else appsList.filter { it.label.contains(searchQuery, ignoreCase = true) }
+    val animatedRoll by animateFloatAsState(targetValue = roll, animationSpec = tween(60), label = "roll")
+    val animatedPitch by animateFloatAsState(targetValue = pitch, animationSpec = tween(60), label = "pitch")
+
+    // ফোনের সব ইনস্টল করা অ্যাপ ফেচ করা
+    val apps = remember {
+        val intent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+        pm.queryIntentActivities(intent, 0).sortedBy { it.loadLabel(pm).toString().lowercase() }
+    }
+
+    val filteredApps = apps.filter {
+        it.loadLabel(pm).toString().contains(searchQuery, ignoreCase = true)
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0A0A0C))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // 1. Search Capsule Bar
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .height(50.dp)
-                    .clip(RoundedCornerShape(25.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color.White.copy(alpha = 0.12f), Color.White.copy(alpha = 0.05f))
-                        )
-                    )
-                    .border(
-                        1.dp,
-                        Brush.linearGradient(
-                            listOf(Color.White.copy(alpha = 0.25f), Color.Transparent)
-                        ),
-                        RoundedCornerShape(25.dp)
-                    )
-                    .clickable { isDrawerOpen = !isDrawerOpen }
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = if (isDrawerOpen) "Search Apps..." else "Void Capsule",
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { _, dragAmount ->
+                    if (dragAmount < -25) isDrawerOpen = true
+                    if (dragAmount > 25) isDrawerOpen = false
                 }
             }
+    ) {
+        // --- ১. মিনিমাল হোম স্ক্রিন উইজেট ---
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 90.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "VOID GLASS",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 24.sp,
+                letterSpacing = 4.sp
+            )
+            Text(
+                text = "Swipe up for apps",
+                color = Color.White.copy(alpha = 0.4f),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 2. Apps Grid / Drawer Area
+        // --- ২. রিয়েল লিকুইড গ্লাস ডক (জাইরোস্কোপ রিফ্লেকশন সহ) ---
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 22.dp, vertical = 28.dp)
+                .fillMaxWidth()
+                .height(86.dp)
+                .shadow(
+                    elevation = 20.dp,
+                    shape = RoundedCornerShape(38.dp),
+                    ambientColor = Color.Black.copy(alpha = 0.4f),
+                    spotColor = Color.Black.copy(alpha = 0.4f)
+                )
+                .clip(RoundedCornerShape(38.dp))
+                .background(Color.White.copy(alpha = 0.12f))
+                .border(
+                    width = 1.5.dp,
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.65f),
+                            Color.White.copy(alpha = 0.10f),
+                            Color.White.copy(alpha = 0.45f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(38.dp)
+                )
+        ) {
+            // ডকের ওপর সেন্সর অনুযায়ী আলোর নড়াচড়া
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                    .fillMaxSize()
+                    .offset(x = animatedRoll.dp, y = animatedPitch.dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.28f),
+                                Color.Transparent
+                            ),
+                            radius = 220f
+                        )
+                    )
+            )
+
+            // ফেভারিট ৪টি ডক অ্যাপ
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                apps.take(4).forEach { app ->
+                    AppIconTile(app = app, pm = pm, showLabel = false) {
+                        launchApp(context, pm, app)
+                    }
+                }
+            }
+        }
+
+        // --- ৩. ফ্রস্টেড অ্যাপ ড্রয়ার ---
+        if (isDrawerOpen) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f))
+                    .padding(top = 48.dp, start = 16.dp, end = 16.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search installed apps...", color = Color.Gray) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(26.dp)),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = Color.White.copy(alpha = 0.08f),
+                        unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                        focusedBorderColor = Color.White.copy(alpha = 0.3f),
+                        unfocusedBorderColor = Color.Transparent
+                    )
+                )
+
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 90.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 18.dp)
                 ) {
                     items(filteredApps) { app ->
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                                    if (launchIntent != null) {
-                                        context.startActivity(launchIntent)
-                                    }
-                                }
-                                .padding(4.dp)
-                        ) {
-                            val bitmap = remember(app.packageName) {
-                                app.icon.toBitmap(120, 120).asImageBitmap()
-                            }
-                            Image(
-                                bitmap = bitmap,
-                                contentDescription = app.label,
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = app.label,
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center
-                            )
+                        AppIconTile(app = app, pm = pm, showLabel = true) {
+                            launchApp(context, pm, app)
+                            isDrawerOpen = false
                         }
                     }
                 }
             }
         }
+    }
+}
 
-        // 3. Liquid Glass Floating Dock (Bottom)
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp)
-                .fillMaxWidth(0.92f)
-                .height(68.dp)
-                .clip(RoundedCornerShape(34.dp))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0.15f),
-                            Color.White.copy(alpha = 0.05f)
-                        )
-                    )
-                )
-                .border(
-                    1.dp,
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0.35f),
-                            Color.White.copy(alpha = 0.08f)
-                        )
-                    ),
-                    RoundedCornerShape(34.dp)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Dock Items (First 4 Installed Apps)
-                appsList.take(4).forEach { app ->
-                    val bitmap = remember(app.packageName) {
-                        app.icon.toBitmap(100, 100).asImageBitmap()
-                    }
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = app.label,
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(CircleShape)
-                            .clickable {
-                                val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                                if (launchIntent != null) {
-                                    context.startActivity(launchIntent)
-                                }
-                            }
-                    )
-                }
-            }
+@Composable
+fun AppIconTile(app: ResolveInfo, pm: PackageManager, showLabel: Boolean, onClick: () -> Unit) {
+    val iconBitmap = remember(app) {
+        app.loadIcon(pm).toBitmap(96, 96).asImageBitmap()
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(6.dp)
+            .clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Image(
+            bitmap = iconBitmap,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp)
+        )
+        if (showLabel) {
+            Text(
+                text = app.loadLabel(pm).toString(),
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
+}
+
+fun launchApp(context: Context, pm: PackageManager, app: ResolveInfo) {
+    val intent = pm.getLaunchIntentForPackage(app.activityInfo.packageName)
+    intent?.let { context.startActivity(it) }
 }
